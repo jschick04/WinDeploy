@@ -2,60 +2,54 @@ Function New-WinPartition {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory,ValueFromPipelineByPropertyName)][object]$Disk,
-        [switch]$MBR,
-        [switch]$USB,
-        [switch]$OS,
-        [ValidateRange('A..Z')][char]$BootDriveLetter,
-        [ValidateRange('A..Z')][char]$OSDriveLetter
+        [Parameter(ParameterSetName='MBR')][switch]$MBR,
+        [Parameter(ParameterSetName='USB')][switch]$USB,
+        [Parameter(ParameterSetName='GPT')][switch]$Client,
+        [ValidateRange(A,Z)][char]$BootDriveLetter,
+        [ValidateRange(A,Z)][char]$OSDriveLetter
     )
-
-    Clear-WinPartition -Disk $Disk
-    try {
-        if ($MBR) {
-            Initialize-Disk -Number $Disk.Number -PartitionStyle MBR -ErrorAction Stop
-                if ($USB) {
-                    $partition = New-Partition -DiskNumber $Disk.Number -DriveLetter $OSDriveLetter -UseMaximumSize -IsActive
-                    Format-Volume -Partition $partition  -FileSystem FAT32 -NewFileSystemLabel 'WinPE'
-                } else {
-                    $bootPartition = New-Partition –InputObject $Disk -Size 350MB -IsActive
-                    Format-Volume -NewFileSystemLabel 'Boot' -FileSystem FAT32 -Partition $bootPartition -Confirm:$False
-                    Set-Partition -InputObject $bootPartition -NewDriveLetter $BootDriveLetter
-
-                    $osPartition = New-Partition –InputObject $Disk -UseMaximumSize
-                    Format-Volume -NewFileSystemLabel 'Windows' -FileSystem NTFS -Partition $osPartition -confirm:$False
-                    Set-Partition -InputObject $osPartition -NewDriveLetter $OSDriveLetter
-                }
+    Begin {
+        if (!$BootDriveLetter) {
+            $bootParam = @{AssignDriveLetter=$true}
         } else {
-            Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop
-            if ($OS) {
-                $recoveryPartition = New-Partition -DiskNumber $Disk.Number -Size 450MB
-                Format-Volume -Partition $recoveryPartition -FileSystem NTFS -NewFileSystemLabel 'Recovery' -Confirm:$False
-                Set-Partition -InputObject $recoveryPartition -GptType '{de94bba4-06d1-4d40-a16a-bfd50179d6ac}'
-
-                $systemPartition = New-Partition -DiskNumber $Disk.Number -Size 100MB -DriveLetter $BootDriveLetter
-                Format-Volume -Partition $systemPartition -FileSystem FAT32 -Confirm:$False
-                Set-Partition -InputObject $systemPartition -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
-
-                $reservedPartition = New-Partition -DiskNumber $Disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}'
-
-                $osPartition = New-Partition -DiskNumber $Disk.Number -UseMaximumSize -DriveLetter $OSDriveLetter
-                Format-Volume -Partition $osPartition -FileSystem NTFS
-            }
-
-            <#$Partition=New-Partition -DiskNumber $Disk.Number -Size 128MB ; # Create Microsoft Basic Partition
-            Format-Volume -Partition $Partition -FileSystem Fat32 -NewFileSystemLabel 'MSR'
-            Set-Partition -DiskNumber $Disk.Number -PartitionNumber $Partition.PartitionNumber -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
-
-            $Partition=New-Partition -DiskNumber $Disk.Number -Size 300MB -DriveLetter $bootLetter ; # Create Microsoft Basic Partition and Set System as bootable
-            Format-Volume -Partition $Partition  -FileSystem Fat32 -NewFileSystemLabel 'Boot'
-            Set-Partition -DiskNumber $Disk.Number -PartitionNumber $Partition.PartitionNumber
-
-            $Partition=New-Partition -DiskNumber $Disk.Number -DriveLetter $osDrive -UseMaximumSize ; # Take remaining Disk space for Operating System
-            Format-Volume -Partition $Partition  -FileSystem NTFS -NewFileSystemLabel 'Windows'#>
+            $bootParam = @{DriveLetter=$BootDriveLetter}
         }
-    } catch {
-        throw $_
+        if (!$OSDriveLetter) {
+            $osParam = @{AssignDriveLetter=$true}
+        } else {
+            $osParam = @{DriveLetter=$OSDriveLetter}
+        }
     }
+    Process {
+        Clear-WinPartition -Disk $Disk
+        try {
+            if ($USB) {
+                Initialize-Disk -InputObject $Disk -PartitionStyle MBR
+                $partition = New-Partition @osParam -InputObject $Disk -UseMaximumSize -IsActive
+                Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'WinPE' -Partition $partition -Confirm:$false
+            } elseif ($MBR) {
+                Initialize-Disk -InputObject $Disk -PartitionStyle MBR
+                $bootPartition = New-Partition @bootParam –InputObject $Disk -Size 350MB -IsActive
+                Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Partition $bootPartition -Confirm:$false
+                $osPartition = New-Partition @osParam –InputObject $Disk -UseMaximumSize
+                Format-Volume -FileSystem NTFS -Partition $osPartition -confirm:$false
+            } else {
+                if (!$BootDriveLetter -or !$OSDriveLetter) {
+                    throw 'Boot and OS drive letters must be specified'
+                }
+                $diskpartTemp = "$env:TEMP\diskpart.txt"
+                if ($Client) {
+                    New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter -Platform Client | Out-File -FilePath $diskpartTemp
+                } else {
+                    New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter | Out-File -FilePath $diskpartTemp
+                }
+                diskpart.exe /s $diskpartTemp
+            }
+        } catch {
+            throw $_
+        }
+    }
+    End {}
 }
 
 Function Clear-WinPartition {
@@ -63,17 +57,129 @@ Function Clear-WinPartition {
     Param (
         [Parameter(Mandatory)][object]$Disk
     )
-    try {
-        Get-Disk -Number $Disk.number | Get-Partition | Remove-partition -Confirm:$false -ErrorAction Stop
-        Clear-Disk -Number $Disk.Number -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
-    } catch {
-        throw $_
+    Begin {}
+    Process {
+        try {
+            Get-Disk -Number $Disk.number | Get-Partition | Remove-partition -Confirm:$false
+            Clear-Disk -Number $Disk.Number -RemoveData -RemoveOEM -Confirm:$false
+        } catch {
+            throw $_
+        }
+    }
+    End {}
+}
+
+Function New-WinDiskpartScript {
+    Param (
+        [Parameter(Mandatory)][int]$DiskNumber,
+        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$BootDriveLetter,
+        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$OSDriveLetter,
+        [ValidateSet('Server','Client')]$Platform = 'Server'
+    )
+    if ($Platform = 'Client') {
+        $diskpart = @"
+Select disk $DiskNumber
+Clean
+Convert GPT
+Create partition primary size=450 id=de94bba4-06d1-4d40-a16a-bfd50179d6ac
+Format quick FS=NTFS label="Recovery"
+Create partition efi size=100
+Format quick FS=FAT32 label="System"
+Assign letter="$BootDriveLetter"
+Create partition msr size=16
+Create partition primary
+Format quick FS=NTFS
+Assign letter="$OSDriveLetter"
+"@
+    } else {
+        $diskpart = @"
+Select disk $DiskNumber
+Clean
+Convert GPT
+Create partition primary size=300 id=de94bba4-06d1-4d40-a16a-bfd50179d6ac
+Format quick FS=NTFS label="Recovery"
+Create partition efi size=100
+Format quick FS=FAT32 label="System"
+Assign letter="$BootDriveLetter"
+Create partition msr size=128
+Create partition primary
+Format quick FS=NTFS
+Assign letter="$OSDriveLetter"
+"@
+    }
+    return $diskpart
+}
+
+Function New-WinPEMedia {
+    [CmdletBinding()]
+    Param (
+        [string]$Temp = "$env:TEMP\WinPE",
+        [string]$Destination = "$env:HOME\Desktop\WinPE"
+    )
+    Begin {
+    }
+    Process {
+        $wpeADK = 'C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64'
+        if (Test-Path $Temp) {
+            Remove-Item -Path $Temp -Recurse -Force
+        }
+        New-Item -Path $Temp -ItemType Directory -Force | Out-Null
+        Copy-Item -Path "$wpeADK\Media" -Destination $Temp -Recurse -Force
+        New-Item -Path "$Temp\Media\Sources" -ItemType Directory -Force | Out-Null
+        Copy-Item -Path "$wpeADK\en-us\winpe.wim" -Destination "$Temp\Media\Sources\boot.wim"
+        New-Item -Path "$Temp\Mount" -ItemType Directory -Force | Out-Null
+
+        Mount-WindowsImage -ImagePath "$Temp\Media\Sources\boot.wim" -Index 1 -Path "$Temp\Mount" | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-WMI.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-WMI_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-NetFx.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-NetFx_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-Scripting.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-Scripting_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-PowerShell.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-PowerShell_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-DismCmdlets.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-DismCmdlets_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-EnhancedStorage.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-EnhancedStorage_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-StorageWMI.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+        Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-StorageWMI_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
+
+        $wpeInitStartup = "powershell.exe -executionpolicy unrestricted -noexit -command 'Clear-Host'"
+        Add-Content -Path "$Temp\Mount\Windows\System32\Startnet.cmd" -Value $wpeInitStartup
+        
+        Dismount-WindowsImage -path "$Temp\Mount" -Save | Out-Null
+        
+        if (Test-Path $Destination) {
+            Remove-Item -Path $Destination -Recurse -Force
+        }
+        New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+        Copy-Item -Path "$Temp\Media" -Destination "$Destination" -Recurse -Force
+        Remove-Item -Path $Temp -Recurse -Force
+        
+        return $Destination
+    }
+    End {
     }
 }
 
-Function Install-WinImage {
+Function Set-WinBoot {
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory)]$Image
+        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$BootDriveLetter,
+        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$OSDriveLetter,
+        [switch]$USB
     )
+    if ($USB) {
+        bootsect.exe /nt60 "$($OSDriveLetter):"
+    } else {
+        bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f All
+    }
 }
+
+Function Install-WinPEUSB {
+    [CmdletBinding()]
+    Param ()
+}
+
+Export-ModuleMember -Function New-WinPartition,Clear-WinPartition,New-WinPEMedia,Set-WinBoot
