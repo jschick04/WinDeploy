@@ -1,12 +1,49 @@
 Function New-WinPartition {
-    [CmdletBinding()]
+<#
+.SYNOPSIS 
+Creates partitions on disk for Windows.
+
+.DESCRIPTION
+Erases disk and creates partitions for MBR, GPT or USB disks for Windows to be installed on.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 1
+
+C:\PS> New-WinPartition -Disk $disk -USB
+
+Formats a USB device for WinPE and auto assigns a drive letter.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 0
+
+C:\PS> New-WinPartition -Disk $disk -OSDriveLetter C -BootDriveLetter S -MBR
+
+Creates a MBR formated disk for Windows Server to be installed on.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 0
+
+C:\PS> New-WinPartition -Disk $disk -OSDriveLetter C -BootDriveLetter S -Client
+
+Creates a GPT formated disk for Windows Client to be installed on.
+ 
+.LINK
+http://blog.acubyte.com
+
+.LINK
+Clear-WinPartition
+
+.LINK
+Set-WinBoot
+#>
+    [CmdletBinding(SupportsShouldProcess)]
     Param (
-        [Parameter(Mandatory,ValueFromPipelineByPropertyName)][object]$Disk,
+        [Parameter(Mandatory,ValueFromPipeline)][object]$Disk,
+        [ValidateRange('A','Z')][char]$OSDriveLetter,
+        [ValidateRange('A','Z')][char]$BootDriveLetter,
         [Parameter(ParameterSetName='MBR')][switch]$MBR,
         [Parameter(ParameterSetName='USB')][switch]$USB,
-        [Parameter(ParameterSetName='GPT')][switch]$Client,
-        [ValidateRange(A,Z)][char]$BootDriveLetter,
-        [ValidateRange(A,Z)][char]$OSDriveLetter
+        [Parameter(ParameterSetName='GPT')][switch]$Client
     )
     Begin {
         if (!$BootDriveLetter) {
@@ -21,8 +58,8 @@ Function New-WinPartition {
         }
     }
     Process {
-        Clear-WinPartition -Disk $Disk
         try {
+            Clear-WinPartition -Disk $Disk -ErrorAction Stop
             if ($USB) {
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR
                 $partition = New-Partition @osParam -InputObject $Disk -UseMaximumSize -IsActive
@@ -32,18 +69,21 @@ Function New-WinPartition {
                 $bootPartition = New-Partition @bootParam –InputObject $Disk -Size 350MB -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Partition $bootPartition -Confirm:$false
                 $osPartition = New-Partition @osParam –InputObject $Disk -UseMaximumSize
-                Format-Volume -FileSystem NTFS -Partition $osPartition -confirm:$false
+                Format-Volume -FileSystem NTFS -Partition $osPartition -Confirm:$false
             } else {
                 if (!$BootDriveLetter -or !$OSDriveLetter) {
                     throw 'Boot and OS drive letters must be specified'
                 }
                 $diskpartTemp = "$env:TEMP\diskpart.txt"
+                $diskpartLog = "$env:TEMP\WinDeploy.log"
                 if ($Client) {
-                    New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter -Platform Client | Out-File -FilePath $diskpartTemp
+                    New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter -Platform Client | Out-File -FilePath $diskpartTemp -Encoding ascii
                 } else {
-                    New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter | Out-File -FilePath $diskpartTemp
+                    New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter | Out-File -FilePath $diskpartTemp -Encoding ascii
                 }
-                diskpart.exe /s $diskpartTemp
+                diskpart.exe /s $diskpartTemp | Out-File -FilePath "$env:TEMP\WinDeploy.log"
+                Remove-Item -Path $diskpartTemp
+                Write-Output "Log: $diskpartLog"
             }
         } catch {
             throw $_
@@ -53,15 +93,37 @@ Function New-WinPartition {
 }
 
 Function Clear-WinPartition {
-    [CmdletBinding()]
+<#
+.SYNOPSIS 
+Completely erases a disk.
+
+.DESCRIPTION
+Removes all partitions and completely erases the disk.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 1
+
+C:\PS> Clear-WinPartition -Disk $disk
+
+Removes all data on disk.
+
+.LINK
+http://blog.acubyte.com
+
+.LINK
+New-WinPartition
+#>
+    [CmdletBinding(SupportsShouldProcess)]
     Param (
         [Parameter(Mandatory)][object]$Disk
     )
     Begin {}
     Process {
         try {
-            Get-Disk -Number $Disk.number | Get-Partition | Remove-partition -Confirm:$false
-            Clear-Disk -Number $Disk.Number -RemoveData -RemoveOEM -Confirm:$false
+            if (!(Get-Disk -Number $Disk.Number).PartitionStyle -eq 'RAW') {
+                Get-Disk -Number $Disk.Number | Get-Partition | Remove-partition -Confirm:$false
+                Clear-Disk -Number $Disk.Number -RemoveData -RemoveOEM -Confirm:$false
+            }
         } catch {
             throw $_
         }
@@ -70,10 +132,30 @@ Function Clear-WinPartition {
 }
 
 Function New-WinDiskpartScript {
+<#
+.SYNOPSIS 
+Creates script for Diskpart.
+
+.DESCRIPTION
+Creates the commands to script a GTP formated disk in diskpart.
+
+.EXAMPLE
+C:\PS> New-WinDiskpartScript -DiskNumber 0 -OSDriveLetter C -BootDriveLetter S | Out-File -Path c:\script.txt
+
+C:\PS> diskpart /s c:\script.txt
+
+Creates a text file for diskpart to use as a script.
+
+.LINK
+http://blog.acubyte.com
+
+.LINK
+New-WinPartition
+#>
     Param (
         [Parameter(Mandatory)][int]$DiskNumber,
-        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$BootDriveLetter,
-        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$OSDriveLetter,
+        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$OSDriveLetter,
+        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$BootDriveLetter,
         [ValidateSet('Server','Client')]$Platform = 'Server'
     )
     if ($Platform = 'Client') {
@@ -82,7 +164,7 @@ Select disk $DiskNumber
 Clean
 Convert GPT
 Create partition primary size=450 id=de94bba4-06d1-4d40-a16a-bfd50179d6ac
-Format quick FS=NTFS label="Recovery"
+Format quick label="Recovery"
 Create partition efi size=100
 Format quick FS=FAT32 label="System"
 Assign letter="$BootDriveLetter"
@@ -111,6 +193,21 @@ Assign letter="$OSDriveLetter"
 }
 
 Function New-WinPEMedia {
+<#
+.SYNOPSIS 
+Generates the files needed for a bootable WinPE media.
+
+.DESCRIPTION
+Creates a custom boot.wim and collects all of the necessary files to create a bootable WinPE media.
+
+.EXAMPLE
+C:\PS> New-WinPEMedia
+
+Generates all of the files in the temp directory and copies them to the users desktop.
+
+.LINK
+http://blog.acubyte.com
+#>
     [CmdletBinding()]
     Param (
         [string]$Temp = "$env:TEMP\WinPE",
@@ -164,16 +261,43 @@ Function New-WinPEMedia {
 }
 
 Function Set-WinBoot {
-    [CmdletBinding()]
+<#
+.SYNOPSIS 
+Sets the boot code.
+
+.DESCRIPTION
+Configures the boot directory to make the drive bootable.
+
+.EXAMPLE
+C:\PS> Set-WinBoot -OSDriveLetter C -BootDriveLetter S
+
+Sets the boot partition to boot from the S drive to load c:\windows.
+
+.EXAMPLE
+C:\PS> Set-WinBoot -OSDriveLetter N -USB
+
+Sets the USB device to become bootable.
+
+.LINK
+http://blog.acubyte.com
+
+.LINK
+New-WinPartition
+#>
+    [CmdletBinding(SupportsShouldProcess)]
     Param (
-        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$BootDriveLetter,
-        [Parameter(Mandatory)][ValidateRange(A,Z)][char]$OSDriveLetter,
-        [switch]$USB
+        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$OSDriveLetter,
+        [Parameter(Mandatory,ParameterSetName='Standard')][ValidateRange('A','Z')][char]$BootDriveLetter,
+        [Parameter(ParameterSetName='USB')][switch]$USB
     )
     if ($USB) {
         bootsect.exe /nt60 "$($OSDriveLetter):"
     } else {
-        bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f All
+        if (!(Test-Path "$($OSDriveLetter):\Windows")) {
+            throw "No Windows installation found at $($OSDriveLetter):\Windows"
+        } else {
+            bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f All
+        }
     }
 }
 
@@ -182,4 +306,24 @@ Function Install-WinPEUSB {
     Param ()
 }
 
-Export-ModuleMember -Function New-WinPartition,Clear-WinPartition,New-WinPEMedia,Set-WinBoot
+Function Write-Log {
+    Param (
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('Info','Warning','Error')][string]$Type = 'Info',
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$Replace
+    )
+    Begin {
+        $VerbosePreference = 'Continue'
+    }
+    Process {
+        if (!(Test-Path $Path)) {
+            New-Item -Path $Path -ItemType File -Force | Out-Null
+        } elseif ($Replace) {
+            Remove-Item -Path $Path
+            New-Item -Path $Path -ItemType File -Force | Out-Null
+        }
+        "[$(Get-Date)][$Type]$Message" | Out-File -FilePath $Path -Append
+    }
+    End {}
+}
