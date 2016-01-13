@@ -62,18 +62,18 @@ Set-WinBoot
         try {
             Clear-WinPartition -Disk $Disk -ErrorAction Stop
             if ($USB) {
-                Initialize-Disk -InputObject $Disk -PartitionStyle MBR
+                Initialize-Disk -InputObject $Disk -PartitionStyle MBR -ErrorAction SilentlyContinue
                 $partition = New-Partition @osParam -InputObject $Disk -UseMaximumSize -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'WinPE' -Partition $partition -Confirm:$false
-                $OSDriveLetter = [char](Get-Volume -Partition $partition).DriveLetter
+                $OSDriveLetter = $partition.DriveLetter
             } elseif ($MBR) {
-                Initialize-Disk -InputObject $Disk -PartitionStyle MBR
+                Initialize-Disk -InputObject $Disk -PartitionStyle MBR -ErrorAction SilentlyContinue
                 $bootPartition = New-Partition @bootParam –InputObject $Disk -Size 350MB -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Partition $bootPartition -Confirm:$false
                 $osPartition = New-Partition @osParam –InputObject $Disk -UseMaximumSize
                 Format-Volume -FileSystem NTFS -Partition $osPartition -Confirm:$false
-                $BootDriveLetter = [char](Get-Volume -Partition $bootPartition).DriveLetter
-                $OSDriveLetter = [char](Get-Volume -Partition $osPartition).DriveLetter
+                $BootDriveLetter = $bootPartition.DriveLetter
+                $OSDriveLetter = $osPartition.DriveLetter
             } else {
                 if (!$BootDriveLetter -or !$OSDriveLetter) {
                     throw 'Boot and OS drive letters must be specified'
@@ -101,7 +101,16 @@ Set-WinBoot
             }
         }
     }
-    End {}
+    End {
+        if (!(Test-Path -Path "$($OSDriveLetter):\")) {
+            throw 'OS drive letter is missing'
+            if ($BootDriveLetter) {
+                if (!(Test-Path -Path "$($BootDriveLetter):\")) {
+                    throw 'Boot drive letter is missing'
+                }
+            }
+        }
+    }
 }
 
 Function Clear-WinPartition {
@@ -229,6 +238,9 @@ http://blog.acubyte.com
     }
     Process {
         $wpeADK = 'C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64'
+        if (!(Test-Path $wpeADK)) {
+            throw 'Windows ADK is not installed'
+        }
         if (Test-Path $Temp) {
             Remove-Item -Path $Temp -Recurse -Force
         }
