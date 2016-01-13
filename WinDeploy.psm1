@@ -36,14 +36,15 @@ Clear-WinPartition
 .LINK
 Set-WinBoot
 #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess,DefaultParameterSetName = 'GPT')]
     Param (
-        [Parameter(Mandatory,ValueFromPipeline)][object]$Disk,
+        [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$Disk,
         [ValidateRange('A','Z')][char]$OSDriveLetter,
         [ValidateRange('A','Z')][char]$BootDriveLetter,
         [Parameter(ParameterSetName='MBR')][switch]$MBR,
         [Parameter(ParameterSetName='USB')][switch]$USB,
-        [Parameter(ParameterSetName='GPT')][switch]$Client
+        [Parameter(ParameterSetName='GPT')]
+            [ValidateSet('Client','Server')][string]$Platform = 'Server'
     )
     Begin {
         if (!$BootDriveLetter) {
@@ -64,29 +65,40 @@ Set-WinBoot
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR
                 $partition = New-Partition @osParam -InputObject $Disk -UseMaximumSize -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'WinPE' -Partition $partition -Confirm:$false
+                $OSDriveLetter = [char](Get-Volume -Partition $partition).DriveLetter
             } elseif ($MBR) {
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR
                 $bootPartition = New-Partition @bootParam –InputObject $Disk -Size 350MB -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Partition $bootPartition -Confirm:$false
                 $osPartition = New-Partition @osParam –InputObject $Disk -UseMaximumSize
                 Format-Volume -FileSystem NTFS -Partition $osPartition -Confirm:$false
+                $BootDriveLetter = [char](Get-Volume -Partition $bootPartition).DriveLetter
+                $OSDriveLetter = [char](Get-Volume -Partition $osPartition).DriveLetter
             } else {
                 if (!$BootDriveLetter -or !$OSDriveLetter) {
                     throw 'Boot and OS drive letters must be specified'
                 }
                 $diskpartTemp = "$env:TEMP\diskpart.txt"
                 $diskpartLog = "$env:TEMP\WinDeploy.log"
-                if ($Client) {
+                if ($Platform = 'Client') {
                     New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter -Platform Client | Out-File -FilePath $diskpartTemp -Encoding ascii
                 } else {
                     New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter | Out-File -FilePath $diskpartTemp -Encoding ascii
                 }
                 diskpart.exe /s $diskpartTemp | Out-File -FilePath "$env:TEMP\WinDeploy.log"
                 Remove-Item -Path $diskpartTemp
-                Write-Output "Log: $diskpartLog"
+                Write-Output "Format Log: $diskpartLog"
             }
         } catch {
             throw $_
+        }
+        if (!(Test-Path -Path "$($OSDriveLetter):\")) {
+            throw 'OS drive letter is missing'
+            if ($BootDriveLetter) {
+                if (!(Test-Path -Path "$($BootDriveLetter):\")) {
+                    throw 'Boot drive letter is missing'
+                }
+            }
         }
     }
     End {}
@@ -115,14 +127,14 @@ New-WinPartition
 #>
     [CmdletBinding(SupportsShouldProcess)]
     Param (
-        [Parameter(Mandatory)][object]$Disk
+        [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$Disk
     )
     Begin {}
     Process {
         try {
-            if (!(Get-Disk -Number $Disk.Number).PartitionStyle -eq 'RAW') {
-                Get-Disk -Number $Disk.Number | Get-Partition | Remove-partition -Confirm:$false
-                Clear-Disk -Number $Disk.Number -RemoveData -RemoveOEM -Confirm:$false
+            if ($Disk.PartitionStyle -ne 'RAW') {
+                Get-Partition -Disk $Disk | Remove-partition -Confirm:$false
+                Clear-Disk -InputObject $Disk -RemoveData -RemoveOEM -Confirm:$false
             }
         } catch {
             throw $_
@@ -242,7 +254,7 @@ http://blog.acubyte.com
         Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\WinPE-StorageWMI.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
         Add-WindowsPackage -PackagePath "$wpeADK\WinPE_OCs\en-us\WinPE-StorageWMI_en-us.cab" -Path "$Temp\Mount" -IgnoreCheck | Out-Null
 
-        $wpeInitStartup = "powershell.exe -executionpolicy unrestricted -noexit -command 'Clear-Host'"
+        $wpeInitStartup = 'powershell.exe -executionpolicy unrestricted -noexit'
         Add-Content -Path "$Temp\Mount\Windows\System32\Startnet.cmd" -Value $wpeInitStartup
         
         Dismount-WindowsImage -path "$Temp\Mount" -Save | Out-Null
@@ -284,26 +296,194 @@ http://blog.acubyte.com
 .LINK
 New-WinPartition
 #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess,DefaultParameterSetName = 'OS')]
     Param (
         [Parameter(Mandatory)][ValidateRange('A','Z')][char]$OSDriveLetter,
-        [Parameter(Mandatory,ParameterSetName='Standard')][ValidateRange('A','Z')][char]$BootDriveLetter,
+        [Parameter(Mandatory,ParameterSetName='OS')]
+            [ValidateRange('A','Z')][char]$BootDriveLetter,
+        [Parameter(ParameterSetName='OS')][switch]$MBR,
         [Parameter(ParameterSetName='USB')][switch]$USB
     )
     if ($USB) {
-        bootsect.exe /nt60 "$($OSDriveLetter):"
+        $result = bootsect.exe /nt60 "$($OSDriveLetter):"
     } else {
         if (!(Test-Path "$($OSDriveLetter):\Windows")) {
             throw "No Windows installation found at $($OSDriveLetter):\Windows"
+        } elseif ($MBR) {
+            $result = bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f BIOS
         } else {
-            bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f All
+            $result = bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f UEFI
         }
     }
+    return $result
 }
 
 Function Install-WinPEUSB {
+<#
+.SYNOPSIS 
+Creates a bootable WinPE USB.
+
+.DESCRIPTION
+Creates a bootable WinPE USB drive and adds any specified images to the device for an easy way to deploy WIM files to physical devices.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 1
+
+C:\PS> Install-WinPEUSB -USB $USBDrive
+
+Creates a bootable WinPE USB drive.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 1
+
+C:\PS> Install-WinPEUSB -USB $USBDrive -Images C:\Images
+
+Creates a bootable WinPE USB drive and adds all of the WIM files in the C:\Images directory to the USB device.
+
+.LINK
+http://blog.acubyte.com
+
+.LINK
+New-WinPEUSB
+
+.LINK
+New-WinPartition
+
+.LINK
+Set-WinBoot
+#>
     [CmdletBinding()]
-    Param ()
+    Param (
+        [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$USB,
+        [string[]]$Images
+    )
+    Begin {}
+    Process {
+        try {
+            New-WinPartition -Disk $USB -USB | Out-Null
+            $winPEMedia = New-WinPEMedia
+            $usbVolume = Get-Volume -FileSystemLabel 'WinPE'
+            Copy-Item -Path "$winPEMedia\Media\*" -Destination "$($usbVolume.DriveLetter):\" -Recurse
+            if ($Images) {
+                $imageDirectory = "$($usbVolume.DriveLetter):\Images"
+                if (!(Test-Path -Path $imageDirectory)) {
+                    New-Item -Path $imageDirectory -ItemType Directory | Out-Null
+                }
+                foreach ($image in $Images) {
+                    if (!(Test-Path -Path $image)) {
+                        Write-Warning "$image is not a valid directory"
+                    } else {
+                        $imageFiles = Get-ChildItem -Path $image -Include '*.wim' -Recurse
+                        foreach ($imageFile in $imageFiles) {
+                            Copy-Item -Path $imageFile.FullName -Destination $imageDirectory -Force
+                        }
+                    }
+                }
+            }
+            $moduleDirectory = "$($usbVolume.DriveLetter):\Modules"
+            if (!(Test-Path -Path $moduleDirectory)) {
+                New-Item -Path $moduleDirectory -ItemType Directory | Out-Null
+            }
+            $winDeployModule = Split-Path -Path (Get-Module -ListAvailable WinDeploy).Path
+            Copy-Item -Path $winDeployModule -Destination $moduleDirectory -Recurse -Force
+            $bootResults = Set-WinBoot -OSDriveLetter $usbVolume.DriveLetter -USB
+        } catch {
+            throw $_
+        }
+    }
+    End {}
+}
+
+Function Install-WinImage {
+<#
+.SYNOPSIS 
+Deploys a WIM file.
+
+.DESCRIPTION
+Creates a bootable disk from a WIM file.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 0
+
+C:\PS> Install-WinImage -Disk $disk -OSDriveLetter C -BootDriveLetter S -WIM D:\Images\WS2012R2.WIM -WIMIndex 3
+
+Installs the 'Windows Server 2012 R2 Datacenter Core' Image to Disk 0 which is formated for UEFI and boots into C:\Windows.
+
+.EXAMPLE
+C:\PS> $disk = Get-Disk -Number 0
+
+C:\PS> Install-WinImage -Disk $disk -OSDriveLetter C -BootDriveLetter S -WIM D:\Images\Win10_Ent_1511.WIM -WIMIndex 1 -MBR
+
+Installs the 'Windows 10 Enterprise' Image to Disk 0 which is formated for MBR and boots into C:\Windows.
+
+.LINK
+http://blog.acubyte.com
+
+.LINK
+Install-WinPEUSB
+
+.LINK
+New-WinPEUSB
+
+.LINK
+New-WinPartition
+
+.LINK
+Set-WinBoot
+#>
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$Disk,
+        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$OSDriveLetter,
+        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$BootDriveLetter,
+        [switch]$MBR,
+        [Parameter(Mandatory)][string]$WIM,
+        [Parameter(Mandatory)][int]$WIMIndex,
+        [string]$LogPath = "$env:TEMP\WinImage.log"
+    )
+    Begin {
+        $PSDefaultParameterValues = @{'Write-Log:Path'=$LogPath}
+        Write-Log -Message "Image Path: $WIM"
+        Write-Log -Message "Index Number: $WIMIndex"
+        Write-Log -Message 'Validating Image'
+        $image = Get-WindowsImage -ImagePath $WIM
+        if ($image.ImageIndex -notcontains $WIMIndex) {
+            Write-Log -Message 'Invalid Image Index' -Type Error
+            throw "$WIMIndex is not a valid Image Index"
+        } else {
+            Write-Log -Message "Using $($image.Where({$_.ImageIndex -eq $WIMIndex}).ImageName)"
+        }
+    }
+    Process {
+        try {
+            if ($image.ImageName -like '*Server*') {
+                Write-Log -Message "Formating Drive Number $($Disk.Number) for Server OS"
+                $format = New-WinPartition -Disk $Disk -OSDriveLetter $OSDriveLetter -BootDriveLetter $BootDriveLetter -ErrorAction Stop
+                Write-Log -Message $format
+            } elseif ($MBR) {
+                Write-Log -Message "Formating Drive Number $($Disk.Number) for MBR"
+                $format = New-WinPartition -Disk $Disk -OSDriveLetter $OSDriveLetter -BootDriveLetter $BootDriveLetter -MBR -ErrorAction Stop
+                Write-Log -Message $format
+            } else {
+                Write-Log -Message "Formating Drive Number $($Disk.Number) for Client OS"
+                $format = New-WinPartition -Disk $Disk -OSDriveLetter $OSDriveLetter -BootDriveLetter $BootDriveLetter -Platform Client -ErrorAction Stop
+                Write-Log -Message $format
+            }
+            Write-Log -Message "Installing $($image.Where({$_.ImageIndex -eq $WIMIndex}).ImageName)"
+            $imageInstall = Expand-WindowsImage -ImagePath $WIM -Index $WIMIndex -ApplyPath "$($OSDriveLetter):\"
+            Write-Log -Message "DISM Log: $($imageInstall.LogPath)"
+            Write-Log -Message "Setting disk to boot from volume $BootDriveLetter to OS volume $OSDriveLetter"
+            $imageBoot = Set-WinBoot -OSDriveLetter $OSDriveLetter -BootDriveLetter $BootDriveLetter
+            Write-Log -Message $imageBoot
+        } catch {
+            Write-Log -Message $Error[0].Exception.Message -Type Error
+            throw "Installation Failed`nDeployment Log: $LogPath"
+        }
+    }
+    End {
+        Write-Log 'Installation Complete'
+        Write-Output "Installation Complete`nDeployment Log: $LogPath"
+    }
 }
 
 Function Write-Log {
