@@ -38,11 +38,12 @@ Set-WinBoot
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$Disk,
-        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$OSDriveLetter,
-        [Parameter(Mandatory)][ValidateRange('A','Z')][char]$BootDriveLetter,
+        [ValidateRange('A','Z')][char]$OSDriveLetter = 'C',
+        [ValidateRange('A','Z')][char]$BootDriveLetter = 'S',
         [switch]$MBR,
         [Parameter(Mandatory)][string]$WIM,
         [Parameter(Mandatory)][int]$WIMIndex,
+        [string]$DriverPath,
         [string]$LogPath = "$env:TEMP\WinImage.log"
     )
     Begin {
@@ -79,8 +80,16 @@ Set-WinBoot
             Write-Log -Message "Setting disk to boot from volume $BootDriveLetter to OS volume $OSDriveLetter"
             $imageBoot = Set-WinBoot -OSDriveLetter $OSDriveLetter -BootDriveLetter $BootDriveLetter
             Write-Log -Message $imageBoot
+            if ($DriverPath) {
+                Write-Log -Message "Installing Drivers from $DriverPath"
+                $drivers = Add-WindowsDriver -Driver $DriverPath -Path "$($OSDriveLetter):\" -SystemDrive "$($BootDriveLetter):\" -LogLevel Errors -Recurse
+                foreach ($driver in $drivers) {
+                    Write-Log -Message "[$($driver.Driver)][$($driver.CatalogFile)][$($driver.ProviderName)]$($driver.ClassDescription) - $($driver.Version)"
+                }
+                Write-Verbose "Driver Log: $($drivers[0].LogPath)"
+            }
         } catch {
-            Write-Log -Message $Error[0].Exception.Message -Type Error
+            Write-Log -Message "$($_.Exception.Message)" -Type Error
             throw "Installation Failed`nDeployment Log: $LogPath"
         }
     }

@@ -27,7 +27,6 @@ New-WinPartition
     Process {
         try {
             if ($Disk.PartitionStyle -ne 'RAW') {
-                Get-Partition -Disk $Disk | Remove-partition -Confirm:$false
                 Clear-Disk -InputObject $Disk -RemoveData -RemoveOEM -Confirm:$false
             }
         } catch {

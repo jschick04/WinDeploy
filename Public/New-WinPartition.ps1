@@ -39,45 +39,37 @@ Set-WinBoot
     [CmdletBinding(SupportsShouldProcess,DefaultParameterSetName = 'GPT')]
     Param (
         [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$Disk,
-        [ValidateRange('A','Z')][char]$OSDriveLetter,
-        [ValidateRange('A','Z')][char]$BootDriveLetter,
+        [ValidateRange('A','Z')][char]$OSDriveLetter = 'C',
+        [ValidateRange('A','Z')][char]$BootDriveLetter = 'S',
         [Parameter(ParameterSetName='MBR')][switch]$MBR,
         [Parameter(ParameterSetName='USB')][switch]$USB,
         [Parameter(ParameterSetName='GPT')]
             [ValidateSet('Client','Server')][string]$Platform = 'Server'
     )
     Begin {
-        if (!$BootDriveLetter) {
-            $bootParam = @{AssignDriveLetter=$true}
-        } else {
-            $bootParam = @{DriveLetter=$BootDriveLetter}
-        }
-        if (!$OSDriveLetter) {
-            $osParam = @{AssignDriveLetter=$true}
-        } else {
-            $osParam = @{DriveLetter=$OSDriveLetter}
-        }
     }
     Process {
         try {
             Clear-WinPartition -Disk $Disk -ErrorAction Stop
+            if (Test-Volume -DriveLetter $OSDriveLetter) {
+                throw "$OSDriveLetter is already in use"
+            } elseif ((Test-Volume -DriveLetter $BootDriveLetter) -and !($USB)) {
+                throw "$BootDriveLetter is already in use"
+            }
             if ($USB) {
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR -ErrorAction SilentlyContinue
-                $partition = New-Partition @osParam -InputObject $Disk -UseMaximumSize -IsActive
+                $partition = New-Partition -DriveLetter $OSDriveLetter -InputObject $Disk -UseMaximumSize -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'WinPE' -Partition $partition -Confirm:$false
                 $OSDriveLetter = $partition.DriveLetter
             } elseif ($MBR) {
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR -ErrorAction SilentlyContinue
-                $bootPartition = New-Partition @bootParam –InputObject $Disk -Size 350MB -IsActive
+                $bootPartition = New-Partition -DriveLetter $BootDriveLetter –InputObject $Disk -Size 350MB -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Partition $bootPartition -Confirm:$false
-                $osPartition = New-Partition @osParam –InputObject $Disk -UseMaximumSize
+                $osPartition = New-Partition -DriveLetter $OSDriveLetter –InputObject $Disk -UseMaximumSize
                 Format-Volume -FileSystem NTFS -Partition $osPartition -Confirm:$false
                 $BootDriveLetter = $bootPartition.DriveLetter
                 $OSDriveLetter = $osPartition.DriveLetter
             } else {
-                if (!$BootDriveLetter -or !$OSDriveLetter) {
-                    throw 'Boot and OS drive letters must be specified'
-                }
                 $diskpartTemp = "$env:TEMP\diskpart.txt"
                 $diskpartLog = "$env:TEMP\WinDeploy.log"
                 if ($Platform = 'Client') {
@@ -91,24 +83,6 @@ Set-WinBoot
             }
         } catch {
             throw $_
-        }
-        if (!(Test-Path -Path "$($OSDriveLetter):\")) {
-            throw 'OS drive letter is missing'
-            if ($BootDriveLetter) {
-                if (!(Test-Path -Path "$($BootDriveLetter):\")) {
-                    throw 'Boot drive letter is missing'
-                }
-            }
-        }
-    }
-    End {
-        if (!(Test-Path -Path "$($OSDriveLetter):\")) {
-            throw 'OS drive letter is missing'
-            if ($BootDriveLetter) {
-                if (!(Test-Path -Path "$($BootDriveLetter):\")) {
-                    throw 'Boot drive letter is missing'
-                }
-            }
         }
     }
 }
