@@ -10,10 +10,10 @@ Function Write-Log {
     }
     Process {
         if (!(Test-Path $Path)) {
-            New-Item -Path $Path -ItemType File -Force | Out-Null
+            $Null = New-Item -Path $Path -ItemType File -Force
         } elseif ($Replace) {
-            Remove-Item -Path $Path
-            New-Item -Path $Path -ItemType File -Force | Out-Null
+            Remove-Item -Path $Path -ErrorAction SilentlyContinue
+            $Null = New-Item -Path $Path -ItemType File -Force
         }
         "[$(Get-Date)][$Type]$Message" | Out-File -FilePath $Path -Append
     }
