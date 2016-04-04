@@ -60,15 +60,12 @@ Set-WinBoot
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR -ErrorAction SilentlyContinue
                 $partition = New-Partition -DriveLetter $OSDriveLetter -InputObject $Disk -UseMaximumSize -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'WinPE' -Partition $partition -Confirm:$false
-                $OSDriveLetter = $partition.DriveLetter
             } elseif ($MBR) {
                 Initialize-Disk -InputObject $Disk -PartitionStyle MBR -ErrorAction SilentlyContinue
                 $bootPartition = New-Partition -DriveLetter $BootDriveLetter –InputObject $Disk -Size 350MB -IsActive
                 Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Partition $bootPartition -Confirm:$false
                 $osPartition = New-Partition -DriveLetter $OSDriveLetter –InputObject $Disk -UseMaximumSize
                 Format-Volume -FileSystem NTFS -Partition $osPartition -Confirm:$false
-                $BootDriveLetter = $bootPartition.DriveLetter
-                $OSDriveLetter = $osPartition.DriveLetter
             } else {
                 $diskpartTemp = "$env:TEMP\diskpart.txt"
                 $diskpartLog = "$env:TEMP\WinDeploy.log"
@@ -77,7 +74,7 @@ Set-WinBoot
                 } else {
                     New-WinDiskpartScript -DiskNumber $Disk.Number -BootDriveLetter $BootDriveLetter -OSDriveLetter $OSDriveLetter | Out-File -FilePath $diskpartTemp -Encoding ascii
                 }
-                diskpart.exe /s $diskpartTemp | Out-File -FilePath "$env:TEMP\WinDeploy.log"
+                diskpart.exe /s $diskpartTemp | Out-File -FilePath $diskpartLog
                 Remove-Item -Path $diskpartTemp
                 Write-Output "Format Log: $diskpartLog"
             }
