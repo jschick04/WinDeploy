@@ -16,7 +16,7 @@ Creates a bootable WinPE USB drive.
 .EXAMPLE
 C:\PS> $disk = Get-Disk -Number 1
 
-C:\PS> Install-WinPEUSB -USB $USBDrive -Images C:\Images
+C:\PS> Install-WinPEUSB -USB $USBDrive -ImagePath C:\Images
 
 Creates a bootable WinPE USB drive and adds all of the WIM files in the C:\Images directory to the USB device.
 
@@ -35,27 +35,44 @@ Set-WinBoot
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$USB,
-        [string[]]$Images
+        [string[]]$ImagePath,
+        [string[]]$DriverPath
     )
     Begin {}
     Process {
         try {
-            New-WinPartition -Disk $USB -USB | Out-Null
+            $Null = New-WinPartition -Disk $USB -USB
             $winPEMedia = New-WinPEMedia
             $usbVolume = Get-Volume -FileSystemLabel 'WinPE'
             Copy-Item -Path "$winPEMedia\Media\*" -Destination "$($usbVolume.DriveLetter):\" -Recurse
-            if ($Images) {
+            if ($ImagePath) {
                 $imageDirectory = "$($usbVolume.DriveLetter):\Images"
                 if (!(Test-Path -Path $imageDirectory)) {
-                    New-Item -Path $imageDirectory -ItemType Directory | Out-Null
+                    $Null = New-Item -Path $imageDirectory -ItemType Directory
                 }
-                foreach ($image in $Images) {
+                foreach ($image in $ImagePath) {
                     if (!(Test-Path -Path $image)) {
-                        Write-Warning "$image is not a valid directory"
+                        Write-Warning "$image is not a valid path"
                     } else {
                         $imageFiles = Get-ChildItem -Path $image -Include '*.wim' -Recurse
                         foreach ($imageFile in $imageFiles) {
                             Copy-Item -Path $imageFile.FullName -Destination $imageDirectory -Force
+                        }
+                    }
+                }
+            }
+            if ($DriverPath) {
+                $driverDirectory = "$($usbVolume.DriveLetter):\Drivers"
+                if (!(Test-Path -Path $driverDirectory)) {
+                    $Null = New-Item -Path $driverDirectory -ItemType Directory
+                }
+                foreach ($driver in $DriverPath) {
+                    if (!(Test-Path -Path $driver)) {
+                        Write-Warning "$driver is not a valid path"
+                    } else {
+                        $files = Get-Item -Path $driver
+                        foreach ($file in $files) {
+                            Copy-Item -Path $file.Name -Destination $driverDirectory -Force
                         }
                     }
                 }
