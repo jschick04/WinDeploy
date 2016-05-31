@@ -1,40 +1,41 @@
+#requires -Version 3 -Modules Storage
 Function New-WinPartition {
 <#
 .SYNOPSIS 
-Creates partitions on disk for Windows.
+   Creates partitions on disk for Windows.
 
 .DESCRIPTION
-Erases disk and creates partitions for MBR, GPT or USB disks for Windows to be installed on.
+   Erases disk and creates partitions for MBR, GPT or USB disks for Windows to be installed on.
 
 .EXAMPLE
-C:\PS> $disk = Get-Disk -Number 1
+   PS C:\> $disk = Get-Disk -Number 1
 
-C:\PS> New-WinPartition -Disk $disk -USB
+   PS C:\> New-WinPartition -Disk $disk -USB
 
-Formats a USB device for WinPE and auto assigns a drive letter.
-
-.EXAMPLE
-C:\PS> $disk = Get-Disk -Number 0
-
-C:\PS> New-WinPartition -Disk $disk -OSDriveLetter C -BootDriveLetter S -MBR
-
-Creates a MBR formated disk for Windows Server to be installed on.
+   Formats a USB device for WinPE and auto assigns a drive letter.
 
 .EXAMPLE
-C:\PS> $disk = Get-Disk -Number 0
+   PS C:\> $disk = Get-Disk -Number 0
 
-C:\PS> New-WinPartition -Disk $disk -OSDriveLetter C -BootDriveLetter S -Client
+   PS C:\> New-WinPartition -Disk $disk -OSDriveLetter C -BootDriveLetter S -MBR
 
-Creates a GPT formated disk for Windows Client to be installed on.
+   Creates a MBR formated disk for Windows Server to be installed on.
+
+.EXAMPLE
+   PS C:\> $disk = Get-Disk -Number 0
+
+   PS C:\> New-WinPartition -Disk $disk -OSDriveLetter C -BootDriveLetter S -Client
+
+   Creates a GPT formated disk for Windows Client to be installed on.
  
 .LINK
-http://blog.acubyte.com
+   http://blog.acubyte.com
 
 .LINK
-Clear-WinPartition
+   Clear-WinPartition
 
 .LINK
-Set-WinBoot
+   Set-WinBoot
 #>
     [CmdletBinding(SupportsShouldProcess,DefaultParameterSetName = 'GPT')]
     Param (

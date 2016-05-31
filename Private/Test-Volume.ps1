@@ -1,3 +1,4 @@
+#requires -Version 3 -Modules Storage
 Function Test-Volume {
     [CmdletBinding()]
     Param (

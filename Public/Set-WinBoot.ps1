@@ -1,26 +1,27 @@
+#requires -Version 3
 Function Set-WinBoot {
 <#
 .SYNOPSIS 
-Sets the boot code.
+   Sets the boot code.
 
 .DESCRIPTION
-Configures the boot directory to make the drive bootable.
+   Configures the boot directory to make the drive bootable.
 
 .EXAMPLE
-C:\PS> Set-WinBoot -OSDriveLetter C -BootDriveLetter S
+   PS C:\> Set-WinBoot -OSDriveLetter C -BootDriveLetter S
 
-Sets the boot partition to boot from the S drive to load c:\windows.
+   Sets the boot partition to boot from the S drive to load c:\windows.
 
 .EXAMPLE
-C:\PS> Set-WinBoot -OSDriveLetter N -USB
+   PS C:\> Set-WinBoot -OSDriveLetter N -USB
 
-Sets the USB device to become bootable.
-
-.LINK
-http://blog.acubyte.com
+   Sets the USB device to become bootable.
 
 .LINK
-New-WinPartition
+   http://blog.acubyte.com
+
+.LINK
+   New-WinPartition
 #>
     [CmdletBinding(SupportsShouldProcess,DefaultParameterSetName = 'OS')]
     Param (
@@ -33,6 +34,7 @@ New-WinPartition
     if ($USB) {
         $result = bootsect.exe /nt60 "$($OSDriveLetter):"
     } else {
+        $null = Get-PSDrive #Fixes C:\Windows as incorrectly showing as not valid
         if (!(Test-Path "$($OSDriveLetter):\Windows")) {
             throw "No Windows installation found at $($OSDriveLetter):\Windows"
         } elseif ($MBR) {
@@ -41,5 +43,5 @@ New-WinPartition
             $result = bcdboot.exe "$($OSDriveLetter):\Windows" /s "$($BootDriveLetter):" /f UEFI
         }
     }
-    return $result
+    Write-Output $result
 }

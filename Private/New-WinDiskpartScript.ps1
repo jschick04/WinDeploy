@@ -1,23 +1,24 @@
+#requires -Version 3
 Function New-WinDiskpartScript {
 <#
 .SYNOPSIS 
-Creates script for Diskpart.
+   Creates script for Diskpart.
 
 .DESCRIPTION
-Creates the commands to script a GTP formated disk in diskpart.
+   Creates the commands to script a GTP formated disk in diskpart.
 
 .EXAMPLE
-C:\PS> New-WinDiskpartScript -DiskNumber 0 -OSDriveLetter C -BootDriveLetter S | Out-File -Path c:\script.txt
+   PS C:\> New-WinDiskpartScript -DiskNumber 0 -OSDriveLetter C -BootDriveLetter S | Out-File -Path c:\script.txt
 
-C:\PS> diskpart /s c:\script.txt
+   PS C:\> diskpart /s c:\script.txt
 
-Creates a text file for diskpart to use as a script.
-
-.LINK
-http://blog.acubyte.com
+   Creates a text file for diskpart to use as a script.
 
 .LINK
-New-WinPartition
+   http://blog.acubyte.com
+
+.LINK
+   New-WinPartition
 #>
     Param (
         [Parameter(Mandatory)][int]$DiskNumber,
@@ -56,5 +57,5 @@ Format quick FS=NTFS
 Assign letter="$OSDriveLetter"
 "@
     }
-    return $diskpart
+    Write-Output $diskpart
 }
