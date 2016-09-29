@@ -39,11 +39,11 @@ Function Install-WinImage {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory,ValueFromPipeline)][ciminstance]$Disk,
+        [Parameter(Mandatory)][string]$WIM,
+        [Parameter(Mandatory)][int]$WIMIndex,
         [ValidateRange('A','Z')][char]$OSDriveLetter = 'C',
         [ValidateRange('A','Z')][char]$BootDriveLetter = 'S',
         [switch]$MBR,
-        [Parameter(Mandatory)][string]$WIM,
-        [Parameter(Mandatory)][int]$WIMIndex,
         [string]$DriverPath,
         [string]$LogPath = "$env:TEMP\WinImage.log"
     )

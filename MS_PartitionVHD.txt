@@ -1,0 +1,215 @@
+switch ($DiskLayout)
+{
+	"BIOS"
+	{
+		Write-W2VInfo "Initializing disk..."
+		Initialize-Disk -Number $disk.Number -PartitionStyle MBR
+
+		#
+		# Create the Windows/system partition
+		#
+		Write-W2VInfo "Creating single partition..."
+		$systemPartition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -MbrType IFS -IsActive
+		$windowsPartition = $systemPartition
+
+		Write-W2VInfo "Formatting windows volume..."
+		$systemVolume = Format-Volume -Partition $systemPartition -FileSystem NTFS -Force -Confirm:$false
+		$windowsVolume = $systemVolume
+	}
+
+	"UEFI"
+	{
+		Write-W2VInfo "Initializing disk..."
+		Initialize-Disk -Number $disk.Number -PartitionStyle GPT
+
+		if ((Get-WindowsBuildNumber) -ge 10240)
+		{
+			#
+			# Create the system partition.  Create a data partition so we can format it, then change to ESP
+			#
+			Write-W2VInfo "Creating EFI system partition..."
+			$systemPartition = New-Partition -DiskNumber $disk.Number -Size 200MB -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
+
+			Write-W2VInfo "Formatting system volume..."
+			$systemVolume = Format-Volume -Partition $systemPartition -FileSystem FAT32 -Force -Confirm:$false
+
+			Write-W2VInfo "Setting system partition as ESP..."
+			$systemPartition | Set-Partition -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
+			$systemPartition | Add-PartitionAccessPath -AssignDriveLetter
+		}
+		else
+		{
+			#
+			# Create the system partition
+			#
+			Write-W2VInfo "Creating EFI system partition (ESP)..."
+			$systemPartition = New-Partition -DiskNumber $disk.Number -Size 200MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
+
+			Write-W2VInfo "Formatting ESP..."
+			$formatArgs = @(
+				"$($systemPartition.DriveLetter):", # Partition drive letter
+				"/FS:FAT32",                        # File system
+				"/Q",                               # Quick format
+				"/Y"                                # Suppress prompt
+				)
+
+			Run-Executable -Executable format -Arguments $formatArgs
+		}
+
+		#
+		# Create the reserved partition
+		#
+		Write-W2VInfo "Creating MSR partition..."
+		$reservedPartition = New-Partition -DiskNumber $disk.Number -Size 128MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}'
+
+		#
+		# Create the Windows partition
+		#
+		Write-W2VInfo "Creating windows partition..."
+		$windowsPartition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
+
+		Write-W2VInfo "Formatting windows volume..."
+		$windowsVolume = Format-Volume -Partition $windowsPartition -FileSystem NTFS -Force -Confirm:$false
+	}
+
+	"WindowsToGo"
+	{
+		Write-W2VInfo "Initializing disk..."
+		Initialize-Disk -Number $disk.Number -PartitionStyle MBR
+
+		#
+		# Create the system partition
+		#
+		Write-W2VInfo "Creating system partition..."
+		$systemPartition = New-Partition -DiskNumber $disk.Number -Size 350MB -MbrType FAT32 -IsActive
+
+		Write-W2VInfo "Formatting system volume..."
+		$systemVolume    = Format-Volume -Partition $systemPartition -FileSystem FAT32 -Force -Confirm:$false
+
+		#
+		# Create the Windows partition
+		#
+		Write-W2VInfo "Creating windows partition..."
+		$windowsPartition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -MbrType IFS
+
+		Write-W2VInfo "Formatting windows volume..."
+		$windowsVolume    = Format-Volume -Partition $windowsPartition -FileSystem NTFS -Force -Confirm:$false
+	}
+}
+
+#
+# Assign drive letter to Windows partition.  This is required for bcdboot
+#
+$windowsPartition | Add-PartitionAccessPath -AssignDriveLetter
+$windowsDrive = $(Get-Partition -Volume $windowsVolume).AccessPaths[0].substring(0,2)
+Write-W2VInfo "Windows path ($windowsDrive) has been assigned."
+
+#
+# Refresh access paths (we have now formatted the volume)
+#
+$systemPartition = $systemPartition | Get-Partition
+$systemDrive = $systemPartition.AccessPaths[0].trimend("\").replace("\?", "??")
+Write-W2VInfo "System volume location: $systemDrive"
+			
+			
+			
+			
+if (Test-Path "$($systemDrive)\boot\bcd")
+{
+	Write-W2VInfo "Image already has BIOS BCD store..."
+}
+elseif (Test-Path "$($systemDrive)\efi\microsoft\boot\bcd")
+{
+	Write-W2VInfo "Image already has EFI BCD store..."
+}
+else
+{
+	Write-W2VInfo "Making image bootable..."
+	$bcdBootArgs = @(
+		"$($windowsDrive)\Windows", # Path to the \Windows on the VHD
+		"/s $systemDrive",          # Specifies the volume letter of the drive to create the \BOOT folder on.
+		"/v"                        # Enabled verbose logging.
+		)
+
+	switch ($DiskLayout)
+	{
+		"BIOS"
+		{
+			$bcdBootArgs += "/f BIOS"   # Specifies the firmware type of the target system partition
+		}
+
+		"UEFI"
+		{
+			$bcdBootArgs += "/f UEFI"   # Specifies the firmware type of the target system partition
+		}
+
+		"WindowsToGo"
+		{
+			# Create entries for both UEFI and BIOS if possible
+			if (Test-Path "$($windowsDrive)\Windows\boot\EFI\bootmgfw.efi")
+			{
+				$bcdBootArgs += "/f ALL"
+			}
+		}
+	}
+
+	Run-Executable -Executable $BCDBoot -Arguments $bcdBootArgs
+
+	# The following is added to mitigate the VMM diff disk handling
+	# We're going to change from MBRBootOption to LocateBootOption.
+
+	if ($DiskLayout -eq "BIOS")
+	{
+		Write-W2VInfo "Fixing the Device ID in the BCD store on $($VHDFormat)..."
+		Run-Executable -Executable "BCDEDIT.EXE" -Arguments (
+			"/store $($systemDrive)\boot\bcd",
+			"/set `{bootmgr`} device locate"
+		)
+		Run-Executable -Executable "BCDEDIT.EXE" -Arguments (
+			"/store $($systemDrive)\boot\bcd",
+			"/set `{default`} device locate"
+		)
+		Run-Executable -Executable "BCDEDIT.EXE" -Arguments (
+			"/store $($systemDrive)\boot\bcd",
+			"/set `{default`} osdevice locate"
+		)
+	}
+}
+
+
+
+if ($Driver)
+{
+	Write-W2VInfo -text "Adding Windows Drivers to the Image"
+	$Driver | ForEach-Object -Process {
+		Write-W2VInfo -text "Driver path: $PSItem"
+		Add-WindowsDriver -Path $windowsDrive -Recurse -Driver $PSItem -Verbose | Out-Null
+	}
+}
+
+If ($Feature)
+{
+	Write-W2VInfo -text "Installing Windows Feature(s) $Feature to the Image"
+	$FeatureSourcePath = Join-Path -Path "$($driveLetter):" -ChildPath "sources\sxs"
+	Write-W2VInfo -text "From $FeatureSourcePath"
+	Enable-WindowsOptionalFeature -FeatureName $Feature -Source $FeatureSourcePath -Path $windowsDrive -All | Out-Null
+}
+
+if ($Package)
+{
+	Write-W2VInfo -text "Adding Windows Packages to the Image"
+
+	$Package | ForEach-Object -Process {
+		Write-W2VInfo -text "Package path: $PSItem"
+		Add-WindowsPackage -Path $windowsDrive -PackagePath $PSItem | Out-Null
+	}
+}
+
+#
+# Remove system partition access path, if necessary
+#
+if ($DiskLayout -eq "UEFI")
+{
+	$systemPartition | Remove-PartitionAccessPath -AccessPath $systemPartition.AccessPaths[0]
+}
+				

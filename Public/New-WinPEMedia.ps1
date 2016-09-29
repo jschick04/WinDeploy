@@ -24,7 +24,7 @@ Function New-WinPEMedia {
     Begin {
     }
     Process {
-        if (!(Test-Path $)) {
+        if (!(Test-Path -Path $AdkPath)) {
             throw 'Windows ADK is not installed'
         }
         if (Test-Path $Temp) {
@@ -56,12 +56,11 @@ Function New-WinPEMedia {
         Add-Content -Path "$Temp\Mount\Windows\System32\Startnet.cmd" -Value $wpeInitStartup
         
         $null = Dismount-WindowsImage -path "$Temp\Mount" -Save
-        
-        if (Test-Path $Destination) {
-            Remove-Item -Path $Destination -Recurse -Force
+
+        if (! $Destination) {
+          $null = New-Item -Path $Destination -ItemType Directory -Force
         }
-        $null = New-Item -Path $Destination -ItemType Directory -Force
-        Copy-Item -Path "$Temp\Media" -Destination "$Destination" -Recurse -Force
+        Copy-Item -Path "$Temp\Media" -Destination $Destination -Recurse -Force
         Remove-Item -Path $Temp -Recurse -Force
         
         Write-Output $Destination
